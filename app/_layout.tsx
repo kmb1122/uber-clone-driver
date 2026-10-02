@@ -1,30 +1,26 @@
-import { useFonts } from 'expo-font';
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import 'react-native-reanimated';
+import { useFonts } from "expo-font";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect } from "react";
+import { Platform, StyleSheet, View, useWindowDimensions } from "react-native";
+import "react-native-reanimated";
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { useColorScheme } from "@/components/useColorScheme";
+import { AuthProvider } from "@/contexts/AuthContext";
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
+export { ErrorBoundary } from "expo-router";
 
 export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
+  initialRouteName: "index",
 };
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
   });
 
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
     if (error) throw error;
   }, [error]);
@@ -44,13 +40,58 @@ export default function RootLayout() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
+  const { height: windowHeight } = useWindowDimensions();
 
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
+  const phoneHeight = 844;
+  const scale = Math.min(windowHeight / phoneHeight, 1);
+
+  const app = (
+    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+      <AuthProvider>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: "#FFFFFF" },
+          }}
+        >
+          <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
+        </Stack>
+      </AuthProvider>
     </ThemeProvider>
   );
+
+  if (Platform.OS === "web") {
+    return (
+      <View style={styles.webContainer}>
+        <View style={[styles.phoneFrame, { transform: [{ scale }] }]}>
+          {app}
+        </View>
+      </View>
+    );
+  }
+
+  return app;
 }
+
+const styles = StyleSheet.create({
+  webContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f2f2f2",
+  },
+  phoneFrame: {
+    width: 390,
+    height: 844,
+    overflow: "hidden",
+    borderRadius: 32,
+    backgroundColor: "#fff",
+
+    // React Native shadow (works on web)
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+  },
+});
