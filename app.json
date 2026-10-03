@@ -33,6 +33,12 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location helps show your position on the driver map."
+        }
       ]
     ],
     "experiments": {

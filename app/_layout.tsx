@@ -12,6 +12,7 @@ export { ErrorBoundary } from "expo-router";
 
 export const unstable_settings = {
   initialRouteName: "index",
+  ssr: false,
 };
 
 SplashScreen.preventAutoHideAsync();
@@ -56,6 +57,7 @@ function RootLayoutNav() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="login" />
+          <Stack.Screen name="account" options={{ headerShown: false }} />
         </Stack>
       </AuthProvider>
     </ThemeProvider>
