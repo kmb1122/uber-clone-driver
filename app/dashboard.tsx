@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Animated,
+  AppState,
   PanResponder,
   Pressable,
   StatusBar,
@@ -29,6 +30,8 @@ export default function DashboardScreen() {
   const { loading, user } = useAuth();
   const insets = useSafeAreaInsets();
   const [isOnline, setIsOnline] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [savingStatus, setSavingStatus] = useState(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const [coordinate, setCoordinate] = useState<Coordinate | null>(null);
@@ -38,6 +41,42 @@ export default function DashboardScreen() {
     null,
   );
   const [sheetOffset] = useState(() => new Animated.Value(SHEET_DRAG_DISTANCE));
+
+  useEffect(() => {
+    if (!user) return;
+
+    let active = true;
+    const loadDriverStatus = async () => {
+      setStatusLoading(true);
+      const { data, error } = await supabase
+        .from("drivers")
+        .select("is_available, lat, lng")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!active) return;
+      if (error) {
+        Alert.alert("Unable to load driver status", error.message);
+      } else {
+        setIsOnline(data?.is_available ?? false);
+        if (data?.lat != null && data.lng != null) {
+          setCoordinate({ latitude: data.lat, longitude: data.lng });
+        }
+        setStatusLoaded(true);
+      }
+      setStatusLoading(false);
+    };
+
+    void loadDriverStatus();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void loadDriverStatus();
+    });
+
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, [user]);
 
   const setExpanded = useCallback(
     (expanded: boolean) => {
@@ -55,14 +94,14 @@ export default function DashboardScreen() {
   );
 
   const toggleOnline = async () => {
-    if (!user || savingStatus) return;
+    if (!user || !statusLoaded || statusLoading || savingStatus) return;
 
     const nextOnlineState = !isOnline;
     setSavingStatus(true);
 
     try {
       let currentCoordinate = coordinate;
-      if (!currentCoordinate) {
+      if (nextOnlineState && !currentCoordinate) {
         const permission = await Location.requestForegroundPermissionsAsync();
         if (!permission.granted) {
           throw new Error("Location permission is needed to go online.");
@@ -78,16 +117,25 @@ export default function DashboardScreen() {
         setCoordinate(currentCoordinate);
       }
 
-      const { error } = await supabase.from("drivers").upsert(
-        {
-          user_id: user.id,
-          lat: currentCoordinate.latitude,
-          lng: currentCoordinate.longitude,
-          is_available: nextOnlineState,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" },
-      );
+      const statusUpdate = nextOnlineState
+        ? supabase.from("drivers").upsert(
+            {
+              user_id: user.id,
+              lat: currentCoordinate!.latitude,
+              lng: currentCoordinate!.longitude,
+              is_available: true,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id" },
+          )
+        : supabase
+            .from("drivers")
+            .update({
+              is_available: false,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("user_id", user.id);
+      const { error } = await statusUpdate;
 
       if (error) throw error;
 
@@ -251,23 +299,26 @@ export default function DashboardScreen() {
         </View>
       )}
 
-      <Pressable
-        accessibilityLabel={isOnline ? "Go offline" : "Go online"}
-        accessibilityRole="button"
-        accessibilityState={{ disabled: savingStatus }}
-        disabled={savingStatus}
-        onPress={toggleOnline}
-        style={({ pressed }) => [
-          styles.goButton,
-          isOnline && styles.goButtonOnline,
-          { bottom: collapsedBottom + 17 },
-          pressed && styles.goButtonPressed,
-        ]}
-      >
-        <Text style={styles.goButtonText}>
-          {savingStatus ? "..." : isOnline ? "STOP" : "GO"}
-        </Text>
-      </Pressable>
+      {!isOnline && (
+        <Pressable
+          accessibilityLabel="Go online"
+          accessibilityRole="button"
+          accessibilityState={{
+            disabled: savingStatus || statusLoading || !statusLoaded,
+          }}
+          disabled={savingStatus || statusLoading || !statusLoaded}
+          onPress={toggleOnline}
+          style={({ pressed }) => [
+            styles.goButton,
+            { bottom: collapsedBottom + 17 },
+            pressed && styles.goButtonPressed,
+          ]}
+        >
+          <Text style={styles.goButtonText}>
+            {savingStatus || statusLoading || !statusLoaded ? "..." : "GO"}
+          </Text>
+        </Pressable>
+      )}
 
       <Animated.View
         {...sheetPanResponder.panHandlers}
@@ -360,14 +411,20 @@ export default function DashboardScreen() {
               : "You're not receiving trip requests right now."}
           </Text>
           <Pressable
+            accessibilityLabel={isOnline ? "Go offline" : "Go online"}
             accessibilityRole="button"
-            accessibilityState={{ disabled: savingStatus }}
-            disabled={savingStatus}
+            accessibilityState={{
+              disabled: savingStatus || statusLoading || !statusLoaded,
+            }}
+            disabled={savingStatus || statusLoading || !statusLoaded}
             onPress={toggleOnline}
-            style={styles.detailsAction}
+            style={[
+              styles.detailsAction,
+              isOnline && styles.detailsActionOnline,
+            ]}
           >
             <Text style={styles.detailsActionText}>
-              {isOnline ? "Go offline" : "Go online"}
+              {isOnline ? "STOP" : "Go online"}
             </Text>
           </Pressable>
         </View>
@@ -583,7 +640,6 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
   },
-  goButtonOnline: { backgroundColor: "#161A1C" },
   goButtonPressed: { transform: [{ scale: 0.96 }] },
   goButtonText: { color: "#FFFFFF", fontSize: 17, fontWeight: "800" },
   sheet: {
@@ -642,5 +698,6 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: "#16191B",
   },
+  detailsActionOnline: { backgroundColor: "#ff2530" },
   detailsActionText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
 });
