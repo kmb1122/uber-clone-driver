@@ -19,7 +19,7 @@ type AuthContextValue = {
     lastName: string;
     email: string;
     password: string;
-  }) => Promise<boolean>;
+  }) => Promise<"signed-in" | "confirmation-required" | "existing-account">;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -92,8 +92,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
       },
     });
 
-    if (error) throw error;
-    return data.session !== null;
+    if (error) {
+      const errorCode = "code" in error ? error.code : undefined;
+      if (
+        errorCode === "user_already_exists" ||
+        /already (registered|exists)/i.test(error.message)
+      ) {
+        return "existing-account";
+      }
+      throw error;
+    }
+
+    if (data.user && data.user.identities?.length === 0) {
+      return "existing-account";
+    }
+    return data.session ? "signed-in" : "confirmation-required";
   };
 
   const signIn: AuthContextValue["signIn"] = async (email, password) => {

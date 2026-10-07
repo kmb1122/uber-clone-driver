@@ -2,7 +2,7 @@ import * as Location from "expo-location";
 import { Redirect, router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import type { ComponentProps } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import DriverMap from "@/components/DriverMap";
 import { useAuth } from "@/contexts/AuthContext";
+import { fetchNearbySearchingRides, type NearbyRide } from "@/lib/rideOffers";
 import { supabase } from "@/lib/supabase";
 
 const SHEET_HEIGHT = 286;
@@ -35,6 +36,9 @@ export default function DashboardScreen() {
   const [savingStatus, setSavingStatus] = useState(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
   const [coordinate, setCoordinate] = useState<Coordinate | null>(null);
+  const coordinateRef = useRef<Coordinate | null>(null);
+  const [nearbyRides, setNearbyRides] = useState<NearbyRide[]>([]);
+  const [dismissedRideId, setDismissedRideId] = useState<string | null>(null);
   const [centerRequest, setCenterRequest] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<"trips" | "insights" | null>(
@@ -77,6 +81,53 @@ export default function DashboardScreen() {
       subscription.remove();
     };
   }, [user]);
+
+  useEffect(() => {
+    coordinateRef.current = coordinate;
+  }, [coordinate]);
+
+  const hasCoordinate = coordinate !== null;
+  useEffect(() => {
+    if (!isOnline || !hasCoordinate) return;
+
+    let active = true;
+    const refreshRideOffers = async () => {
+      const currentCoordinate = coordinateRef.current;
+      if (!currentCoordinate) return;
+
+      try {
+        const offers = await fetchNearbySearchingRides(currentCoordinate);
+        if (active) setNearbyRides(offers);
+      } catch (error) {
+        if (active) {
+          console.error("Unable to fetch nearby ride offers", error);
+          setNearbyRides([]);
+        }
+      }
+    };
+
+    void refreshRideOffers();
+    const rideChanges = supabase
+      .channel("driver-ride-offers")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rides" },
+        () => void refreshRideOffers(),
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          console.log("[ride-offers] Listening for rides table changes.");
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error("Ride realtime subscription status:", status);
+        }
+      });
+    const interval = setInterval(() => void refreshRideOffers(), 15_000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      void supabase.removeChannel(rideChanges);
+    };
+  }, [hasCoordinate, isOnline]);
 
   const setExpanded = useCallback(
     (expanded: boolean) => {
@@ -188,6 +239,16 @@ export default function DashboardScreen() {
   if (!user) return <Redirect href="/login" />;
 
   const collapsedBottom = SHEET_COLLAPSED_HEIGHT + insets.bottom;
+  const rideOffer =
+    isOnline && hasCoordinate
+      ? nearbyRides.find((ride) => ride.id !== dismissedRideId)
+      : undefined;
+  const fareValue = rideOffer ? Number(rideOffer.fare) : Number.NaN;
+  const fareLabel = rideOffer
+    ? Number.isFinite(fareValue)
+      ? `$${fareValue.toFixed(2)}`
+      : rideOffer.fare
+    : "";
 
   return (
     <View style={styles.screen}>
@@ -296,6 +357,84 @@ export default function DashboardScreen() {
               ? "No requests nearby"
               : "$93.66 earned today"}
           </Text>
+        </View>
+      )}
+
+      {rideOffer && (
+        <View
+          accessibilityLabel="New UberX ride offer"
+          style={[styles.rideOffer, { bottom: collapsedBottom + 12 }]}
+        >
+          <View style={styles.offerHeader}>
+            <View style={styles.offerType}>
+              <Text style={styles.offerTypeText}>UberX</Text>
+            </View>
+            <Text style={styles.exclusiveTag}>Exclusive</Text>
+            <Pressable
+              accessibilityLabel="Dismiss ride offer"
+              accessibilityRole="button"
+              onPress={() => setDismissedRideId(rideOffer.id)}
+              style={styles.dismissButton}
+            >
+              <SymbolView
+                name={{ ios: "xmark", android: "close", web: "close" }}
+                size={15}
+                tintColor="#555D62"
+              />
+            </Pressable>
+          </View>
+
+          <Text style={styles.offerFare}>{fareLabel}</Text>
+
+          {rideOffer.rating && (
+            <View style={styles.offerRating}>
+              <SymbolView
+                name={{ ios: "star.fill", android: "star", web: "star" }}
+                size={12}
+                tintColor="#1C2225"
+              />
+              <Text style={styles.offerRatingText}>{rideOffer.rating}</Text>
+            </View>
+          )}
+
+          <View style={styles.offerRoute}>
+            <View style={styles.routeRail}>
+              <View style={styles.pickupDot} />
+              <View style={styles.routeLine} />
+              <View style={styles.dropoffDot} />
+            </View>
+            <View style={styles.routeStops}>
+              <View style={styles.routeStop}>
+                <Text style={styles.routeMeta}>
+                  {rideOffer.durationSeconds != null
+                    ? `${Math.max(1, Math.round(rideOffer.durationSeconds / 60))} MIN · `
+                    : ""}
+                  {(rideOffer.distanceMeters / 1000).toFixed(1)} KM AWAY
+                </Text>
+                <Text numberOfLines={1} style={styles.routeAddress}>
+                  {rideOffer.pickupAddress}
+                </Text>
+              </View>
+              <View style={styles.routeStop}>
+                <Text style={styles.routeMeta}>DROP-OFF</Text>
+                <Text numberOfLines={1} style={styles.routeAddress}>
+                  {rideOffer.dropoffAddress}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <Pressable
+            accessibilityLabel={`Accept ride offer for ${fareLabel}`}
+            accessibilityRole="button"
+            onPress={() => setDismissedRideId(rideOffer.id)}
+            style={({ pressed }) => [
+              styles.acceptButton,
+              pressed && styles.acceptButtonPressed,
+            ]}
+          >
+            <Text style={styles.acceptButtonText}>Accept</Text>
+          </Pressable>
         </View>
       )}
 
@@ -622,6 +761,123 @@ const styles = StyleSheet.create({
   },
   toolPopoverTitle: { color: "#181B1D", fontSize: 14, fontWeight: "700" },
   toolPopoverBody: { color: "#6F777C", fontSize: 12, marginTop: 4 },
+  rideOffer: {
+    position: "absolute",
+    left: 10,
+    right: 10,
+    zIndex: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#D6DCE1",
+    borderRadius: 10,
+    backgroundColor: "#FFFFFF",
+    elevation: 12,
+    shadowColor: "#101314",
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  offerHeader: {
+    height: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  offerType: {
+    height: 21,
+    paddingHorizontal: 7,
+    justifyContent: "center",
+    borderRadius: 5,
+    backgroundColor: "#171A1C",
+  },
+  offerTypeText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
+  exclusiveTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: "#EEF5FC",
+    color: "#326FAE",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  dismissButton: {
+    width: 28,
+    height: 28,
+    marginLeft: "auto",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+    backgroundColor: "#F3F4F5",
+  },
+  offerFare: {
+    marginTop: 2,
+    color: "#111516",
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: "800",
+  },
+  offerRating: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  offerRatingText: { color: "#31383C", fontSize: 11, fontWeight: "600" },
+  offerRoute: {
+    minHeight: 62,
+    marginTop: 9,
+    marginBottom: 9,
+    flexDirection: "row",
+  },
+  routeRail: {
+    width: 17,
+    alignItems: "center",
+    paddingTop: 3,
+    paddingBottom: 8,
+  },
+  pickupDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#1C2428",
+  },
+  routeLine: {
+    flex: 1,
+    marginVertical: 2,
+    borderLeftWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "#A8B0B5",
+  },
+  dropoffDot: {
+    width: 6,
+    height: 6,
+    borderWidth: 1.5,
+    borderColor: "#1C2428",
+    backgroundColor: "#FFFFFF",
+  },
+  routeStops: { flex: 1, justifyContent: "space-between" },
+  routeStop: { minHeight: 27, justifyContent: "center" },
+  routeMeta: {
+    color: "#646D72",
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "700",
+  },
+  routeAddress: {
+    color: "#252B2E",
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "500",
+  },
+  acceptButton: {
+    height: 43,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 6,
+    backgroundColor: "#2879E5",
+  },
+  acceptButtonPressed: { backgroundColor: "#1F66C5" },
+  acceptButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
   goButton: {
     position: "absolute",
     alignSelf: "center",

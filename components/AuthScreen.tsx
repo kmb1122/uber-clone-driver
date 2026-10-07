@@ -107,17 +107,21 @@ export default function AuthScreen({ mode }: AuthScreenProps) {
     try {
       const email = form.email.trim().toLowerCase();
       if (isSignup) {
-        const hasSession = await signUp({
+        const signupResult = await signUp({
           firstName: form.firstName.trim(),
           lastName: form.lastName.trim(),
           email,
           password: form.password,
         });
-        setMessage(
-          hasSession
-            ? "Your driver account is ready."
-            : "Check your email to confirm your account.",
-        );
+        if (signupResult === "existing-account") {
+          setMessage(
+            "We couldn't complete signup with those details. Try logging in instead, or check your email for an account confirmation link.",
+          );
+        } else if (signupResult === "signed-in") {
+          setMessage("Your driver account is ready.");
+        } else {
+          setMessage("Check your email to confirm your account.");
+        }
       } else {
         await signIn(email, form.password);
         setMessage("You are signed in.");
